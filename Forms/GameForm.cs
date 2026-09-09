@@ -101,7 +101,11 @@ public class GameForm : Form
     // CONSTRUTOR
     // =========================================================
 
-    public GameForm()
+    public GameForm(
+        string naveSpritePath = "Assets/Player/tux.png",
+        int pontosVida = 5,
+        int pontosVelocidade = 5,
+        int pontosDano = 5)
     {
         // -----------------------------------------------------
         // CONFIGURAÇÃO DA JANELA
@@ -206,12 +210,17 @@ public class GameForm : Form
 
         player = new Player();
 
-        player.HP = 5;
-        player.MaxHP = 5;
+        // Atributos definidos pelo jogador na Tela de Entrada.
+        // As fórmulas abaixo mantêm o balanceamento original do
+        // jogo quando os pontos são distribuídos igualmente (5/5/5).
+        player.MaxHP = pontosVida;
+        player.HP = pontosVida;
+        player.Speed = 200f + (pontosVelocidade * 30f);
+        player.Damage = 5 + pontosDano;
 
         player.Sprite =
             Image.FromFile(
-                "Assets/Player/tux.png"
+                naveSpritePath
             );
 
         player.X = 300;
@@ -474,7 +483,7 @@ public class GameForm : Form
         // MOVIMENTO DO JOGADOR
         // -----------------------------------------------------
 
-        float playerSpeed = 350f;
+        float playerSpeed = player.Speed;
 
         if (InputManager.KeyDown(Keys.W))
         {

@@ -9,8 +9,20 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
+        using var telaEntrada = new FormTelaEntrada();
+
+        // Se o jogador fechar a Tela de Entrada sem clicar em
+        // "Iniciar Jogo", o programa é encerrado sem abrir o GameForm.
+        if (telaEntrada.ShowDialog() != DialogResult.OK)
+            return;
+
         Application.Run(
-            new GameForm()
+            new GameForm(
+                telaEntrada.NaveSelecionadaCaminho,
+                telaEntrada.PontosVida,
+                telaEntrada.PontosVelocidade,
+                telaEntrada.PontosDano
+            )
         );
     }
 }

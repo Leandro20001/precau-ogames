@@ -10,6 +10,7 @@ public class Player : Entity
     public int RAM { get; set; } = 100;
     public int MaxRAM { get; set; } = 100;
     public int Damage { get; set; } = 10;
+    public float Speed { get; set; } = 350f;
 
     public void Move(float dx, float dy, float delta)
     {
