@@ -408,6 +408,18 @@ public class GameForm : Form
         InputManager.KeyPressed(
             e.KeyCode
         );
+
+        // Precisa ser checado aqui, e não dentro do GameLoop,
+        // porque o gameTimer é parado no Game Over — então o
+        // GameLoop (e HandleGameOver) param de rodar. O evento
+        // de teclado do form, porém, continua disparando normalmente.
+        if (
+            player.HP <= 0
+            && e.KeyCode == Keys.R
+        )
+        {
+            Application.Restart();
+        }
     }
 
 
@@ -771,12 +783,11 @@ public class GameForm : Form
 
     private void HandleGameOver()
     {
-        gameTimer.Stop();
-
-        if (InputManager.KeyDown(Keys.R))
-        {
-            Application.Restart();
-        }
+        // O gameTimer NÃO é parado aqui de propósito: o form
+        // precisa continuar "vivo" para o KeyDown (Keys.R) do
+        // OnGameKeyDown continuar disparando e permitir reiniciar.
+        // O próprio GameLoop já retorna cedo quando player.HP <= 0,
+        // então o resto da lógica do jogo não é mais executado.
     }
 
 
@@ -989,7 +1000,7 @@ public class GameForm : Form
                     // DANO
                     // -----------------------------------------
 
-                    enemy.HP -= player.Damage;
+                    enemy.TakeDamage(player.Damage);
 
 
                     // -----------------------------------------
