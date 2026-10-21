@@ -7,6 +7,14 @@ namespace TuxSpace.Forms;
 
 public class GameForm : Form
 {
+    private enum GameState
+    {
+        Playing,
+        Paused,
+        GameOver,
+        Victory
+    }
+
     // =========================================================
     // SISTEMA PRINCIPAL
     // =========================================================
@@ -23,6 +31,9 @@ public class GameForm : Form
 
     private readonly Animation enemyAnimation;
     private readonly Animation explosionAnimation;
+    private readonly Image lootImage;
+    private readonly Cursor gameCursor;
+    private readonly Panel pauseMenu;
 
 
     // =========================================================
@@ -32,6 +43,9 @@ public class GameForm : Form
     private readonly Player player;
 
     private float playerInvulnerability = 0f;
+
+    private GameState gameState = GameState.Playing;
+    private GameState stateBeforePause = GameState.Playing;
 
 
     // =========================================================
@@ -49,7 +63,15 @@ public class GameForm : Form
 
     private readonly List<Enemy> enemies = new();
 
-    private int enemiesKilled = 0;
+    private static readonly int[] EnemyHealthByWave = { 6, 8, 15 };
+    private int MaxWaves => EnemyHealthByWave.Length;
+    private const int EnemiesPerWave = 5;
+    private int currentWave = 1;
+    private int spawnedEnemiesThisWave;
+    private int score;
+    private float waveTransitionTimer;
+    private float waveAnnouncementTimer;
+    private bool finalWaveCleared;
 
 
     // =========================================================
@@ -58,16 +80,7 @@ public class GameForm : Form
 
     private readonly List<Explosion> explosions = new();
 
-
-    // =========================================================
-    // FASES
-    // =========================================================
-
-    private int currentPhase = 1;
-
-    private bool phase1Completed = false;
-
-    private bool waitingPhase2 = false;
+    private readonly List<LootPickup> lootPickups = new();
 
 
     // =========================================================
@@ -114,6 +127,13 @@ public class GameForm : Form
         WindowState = FormWindowState.Maximized;
         FormBorderStyle = FormBorderStyle.None;
         KeyPreview = true;
+        lootImage = Image.FromFile("Assets/Loot/item_heal.png");
+        gameCursor = CustomCursorFactory.LoadFromPng("Assets/cursor.png");
+        FormClosed += (_, _) =>
+        {
+            lootImage.Dispose();
+            gameCursor.Dispose();
+        };
 
 
         // -----------------------------------------------------
@@ -133,6 +153,13 @@ public class GameForm : Form
             ImageLayout.Stretch;
 
         Controls.Add(fundo);
+        fundo.Cursor = gameCursor;
+        Cursor = gameCursor;
+
+        pauseMenu = CreatePauseMenu();
+        fundo.Controls.Add(pauseMenu);
+        CenterPauseMenu();
+        fundo.Resize += (_, _) => CenterPauseMenu();
 
 
         // -----------------------------------------------------
@@ -265,6 +292,104 @@ public class GameForm : Form
         fundo.MouseUp += OnMouseUp;
     }
 
+    private Panel CreatePauseMenu()
+    {
+        Panel menu = new DoubleBufferedPanel
+        {
+            Size = new Size(400, 300),
+            BackColor = Color.FromArgb(0, 0, 128),
+            BorderStyle = BorderStyle.Fixed3D,
+            Visible = false,
+            Cursor = Cursors.Default
+        };
+
+        Label title = new()
+        {
+            Text = "JOGO PAUSADO",
+            ForeColor = Color.Yellow,
+            Font = new Font("Microsoft Sans Serif", 22, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Location = new Point(0, 35),
+            Size = new Size(menu.Width, 45),
+            BackColor = menu.BackColor
+        };
+        menu.Controls.Add(title);
+
+        Button continueButton = CreatePauseMenuButton("Continuar", 120);
+        continueButton.Click += (_, _) => ResumeGame();
+        menu.Controls.Add(continueButton);
+
+        Button restartButton = CreatePauseMenuButton("Reiniciar", 180);
+        restartButton.Click += (_, _) => Application.Restart();
+        menu.Controls.Add(restartButton);
+
+        Button exitButton = CreatePauseMenuButton("Sair para Windows", 240);
+        exitButton.Click += (_, _) => Application.Exit();
+        menu.Controls.Add(exitButton);
+
+        return menu;
+    }
+
+    private static Button CreatePauseMenuButton(string text, int top)
+    {
+        Button button = new()
+        {
+            Text = text,
+            Size = new Size(200, 40),
+            Location = new Point(100, top),
+            FlatStyle = FlatStyle.Standard,
+            ForeColor = Color.Navy,
+            BackColor = Color.Silver,
+            UseVisualStyleBackColor = false,
+            Font = new Font("Microsoft Sans Serif", 10, FontStyle.Bold),
+            Cursor = Cursors.Default
+        };
+        return button;
+    }
+
+    private void CenterPauseMenu()
+    {
+        if (pauseMenu is null)
+            return;
+
+        pauseMenu.Location = new Point(
+            Math.Max(0, (fundo.ClientSize.Width - pauseMenu.Width) / 2),
+            Math.Max(0, (fundo.ClientSize.Height - pauseMenu.Height) / 2)
+        );
+    }
+
+    private void PauseGame()
+    {
+        stateBeforePause = gameState;
+        gameState = GameState.Paused;
+        leftMousePressed = false;
+        gameTimer.Stop();
+        frameClock.Stop();
+        UpdatePauseMenuVisibility();
+    }
+
+    private void ResumeGame()
+    {
+        gameState = stateBeforePause;
+        UpdatePauseMenuVisibility();
+        frameClock.Restart();
+        gameTimer.Start();
+        fundo.Focus();
+    }
+
+    private void UpdatePauseMenuVisibility()
+    {
+        bool isPaused = gameState == GameState.Paused;
+        pauseMenu.Visible = isPaused;
+        if (isPaused)
+            pauseMenu.BringToFront();
+
+        Cursor activeCursor = gameState == GameState.Playing ? gameCursor : Cursors.Default;
+        fundo.Cursor = activeCursor;
+        Cursor = activeCursor;
+        fundo.Invalidate();
+    }
+
 
     // =========================================================
     // CRIAÇÃO DE INIMIGO
@@ -280,7 +405,7 @@ public class GameForm : Form
         enemy.Width = 128;
         enemy.Height = 128;
 
-        enemy.Speed = 220f;
+        enemy.Speed = 220f + (currentWave - 1) * 20f;
 
         enemy.X = fundo.Width + 100;
 
@@ -290,30 +415,13 @@ public class GameForm : Form
                 Math.Max(51, fundo.Height - 100)
             );
 
-        enemy.HP = 20;
+        enemy.HP = EnemyHealthByWave[currentWave - 1] * 20;
 
-        enemy.TargetOffset =
-            random.Next(-350, 350);
-
-        enemy.WaveOffset =
-            (float)(
-                random.NextDouble()
-                * Math.PI
-                * 2
-            );
-
-        enemy.WaveSpeed =
-            2f +
-            (float)random.NextDouble() * 3f;
-
-        enemy.FollowStrength =
-            0.3f +
-            (float)random.NextDouble() * 1.2f;
-
-        enemy.AttackDistance =
-            random.Next(150, 450);
+        enemy.VerticalSpeed = random.Next(120, 261) + (currentWave - 1) * 20f;
+        enemy.VerticalDirection = random.Next(0, 2) == 0 ? -1 : 1;
 
         enemies.Add(enemy);
+        spawnedEnemiesThisWave++;
     }
 
 
@@ -396,6 +504,26 @@ public class GameForm : Form
         }
     }
 
+    private void UpdateLootPickups(float delta)
+    {
+        for (int i = lootPickups.Count - 1; i >= 0; i--)
+        {
+            LootPickup loot = lootPickups[i];
+            loot.Update(delta);
+
+            if (loot.Bounds.IntersectsWith(player.Bounds))
+            {
+                player.Heal(1);
+                score += 50;
+                lootPickups.RemoveAt(i);
+            }
+            else if (loot.IsExpired)
+            {
+                lootPickups.RemoveAt(i);
+            }
+        }
+    }
+
 
     // =========================================================
     // TECLA PRESSIONADA
@@ -405,21 +533,53 @@ public class GameForm : Form
         object? sender,
         KeyEventArgs e)
     {
+        bool wasKeyDown = InputManager.KeyDown(e.KeyCode);
         InputManager.KeyPressed(
             e.KeyCode
         );
 
-        // Precisa ser checado aqui, e não dentro do GameLoop,
-        // porque o gameTimer é parado no Game Over — então o
-        // GameLoop (e HandleGameOver) param de rodar. O evento
-        // de teclado do form, porém, continua disparando normalmente.
-        if (
-            player.HP <= 0
+        if (wasKeyDown)
+            return;
+
+        if (e.KeyCode == Keys.E)
+            TryFireSpecialShot();
+
+        if (e.KeyCode == Keys.Escape)
+        {
+            if (gameState == GameState.Playing)
+            {
+                PauseGame();
+            }
+            else if (gameState == GameState.Paused)
+            {
+                ResumeGame();
+            }
+            else if (gameState == GameState.GameOver || gameState == GameState.Victory)
+            {
+                Close();
+            }
+
+            return;
+        }
+
+        if (gameState == GameState.Paused)
+        {
+            if (e.KeyCode == Keys.P)
+                ResumeGame();
+            else if (e.KeyCode == Keys.R)
+                Application.Restart();
+            else if (e.KeyCode == Keys.Q)
+                Application.Exit();
+        }
+        else if (
+            (gameState == GameState.GameOver || gameState == GameState.Victory || player.HP <= 0)
             && e.KeyCode == Keys.R
         )
         {
             Application.Restart();
         }
+
+        fundo.Invalidate();
     }
 
 
@@ -449,6 +609,29 @@ public class GameForm : Form
         {
             leftMousePressed = true;
         }
+        else if (
+            e.Button == MouseButtons.Right
+        )
+        {
+            TryFireSpecialShot();
+        }
+    }
+
+    private void TryFireSpecialShot()
+    {
+        if (
+            gameState != GameState.Playing
+            || choosingUpgrade
+            || !player.TrySpendAllRAM(100)
+        )
+        {
+            return;
+        }
+
+        projectiles.Add(
+            ProjectileFactory.CreatePlayerSpecialProjectile(player)
+        );
+        fundo.Invalidate();
     }
 
 
@@ -490,57 +673,31 @@ public class GameForm : Form
 
         delta = Math.Min(delta, 0.1f);
 
+        if (player.HP <= 0)
+        {
+            HandleGameOver();
+            UpdateExplosions(delta);
+            fundo.Invalidate();
+            return;
+        }
+
+        if (gameState == GameState.Paused || gameState == GameState.Victory)
+        {
+            fundo.Invalidate();
+            return;
+        }
 
         // -----------------------------------------------------
         // MOVIMENTO DO JOGADOR
         // -----------------------------------------------------
 
-        float playerSpeed = player.Speed;
-
-        if (InputManager.KeyDown(Keys.W))
-        {
-            player.Move(0, -playerSpeed, delta);
-        }
-
-        if (InputManager.KeyDown(Keys.A))
-        {
-            player.Move(-playerSpeed, 0, delta);
-        }
-
-        if (InputManager.KeyDown(Keys.S))
-        {
-            player.Move(0, playerSpeed, delta);
-        }
-
-        if (InputManager.KeyDown(Keys.D))
-        {
-            player.Move(playerSpeed, 0, delta);
-        }
-
-
-        // -----------------------------------------------------
-        // ESC
-        // -----------------------------------------------------
-
-        if (InputManager.KeyDown(Keys.Escape))
-        {
-            Close();
-            return;
-        }
-
-
-        // -----------------------------------------------------
-        // GAME OVER
-        // -----------------------------------------------------
-
-        if (player.HP <= 0)
-        {
-            HandleGameOver();
-
-            fundo.Invalidate();
-
-            return;
-        }
+        float horizontalInput =
+            (InputManager.KeyDown(Keys.D) ? 1f : 0f)
+            - (InputManager.KeyDown(Keys.A) ? 1f : 0f);
+        float verticalInput =
+            (InputManager.KeyDown(Keys.S) ? 1f : 0f)
+            - (InputManager.KeyDown(Keys.W) ? 1f : 0f);
+        player.UpdateMovement(horizontalInput, verticalInput, delta);
 
 
         // -----------------------------------------------------
@@ -548,6 +705,8 @@ public class GameForm : Form
         // -----------------------------------------------------
 
         if (
+            gameState == GameState.Playing
+            &&
             player.XP >= player.XPToNextLevel
             && !choosingUpgrade
         )
@@ -599,88 +758,7 @@ public class GameForm : Form
         // LIMITES DO JOGADOR
         // -----------------------------------------------------
 
-        if (player.X < 0)
-        {
-            player.X = 0;
-        }
-
-        if (player.Y < 0)
-        {
-            player.Y = 0;
-        }
-
-
-        // -----------------------------------------------------
-        // FASE 1 COMPLETA
-        // -----------------------------------------------------
-
-        if (enemiesKilled >= 15)
-        {
-            waitingPhase2 = true;
-        }
-
-
-        // -----------------------------------------------------
-        // PASSAGEM PARA FASE 2
-        // -----------------------------------------------------
-
-        if (
-            waitingPhase2
-            && player.X > fundo.Width
-        )
-        {
-            currentPhase = 2;
-
-            waitingPhase2 = false;
-
-            player.X = 100;
-
-            player.Y =
-                fundo.Height / 2;
-
-            enemies.Clear();
-
-            projectiles.Clear();
-
-            enemyProjectiles.Clear();
-
-            MessageBox.Show(
-                "FASE 2 - CHUVA DE METEOROS"
-            );
-        }
-
-
-        // -----------------------------------------------------
-        // LIMITES HORIZONTAIS
-        // -----------------------------------------------------
-
-        if (!waitingPhase2)
-        {
-            if (
-                player.X + player.Width
-                > fundo.Width
-            )
-            {
-                player.X =
-                    fundo.Width
-                    - player.Width;
-            }
-        }
-
-
-        // -----------------------------------------------------
-        // LIMITE INFERIOR
-        // -----------------------------------------------------
-
-        if (
-            player.Y + player.Height
-            > fundo.Height
-        )
-        {
-            player.Y =
-                fundo.Height
-                - player.Height;
-        }
+        player.ClampToBounds(fundo.Width, fundo.Height);
 
 
         // -----------------------------------------------------
@@ -694,73 +772,41 @@ public class GameForm : Form
 
 
         // -----------------------------------------------------
-        // SPAWN DOS INIMIGOS
+        // SPAWN E PROGRESSÃO DAS ONDAS
         // -----------------------------------------------------
 
-        spawnTimer -= delta;
-
-        if (
-            !phase1Completed
-            && spawnTimer <= 0
-            && enemies.Count < 6
-        )
+        if (gameState == GameState.Playing)
         {
-            SpawnEnemy();
+            if (!finalWaveCleared && waveTransitionTimer <= 0)
+            {
+                spawnTimer -= delta;
 
-            spawnTimer =
-                (float)(
-                    random.NextDouble() * 1.5
-                    + 0.5
-                );
+                if (
+                    spawnedEnemiesThisWave < EnemiesPerWave
+                    && spawnTimer <= 0
+                    && enemies.Count < 6
+                )
+                {
+                    SpawnEnemy();
+
+                    spawnTimer =
+                        (float)(
+                            random.NextDouble() * 1.5
+                            + 0.5
+                        );
+                }
+            }
+
+            UpdateEnemies(delta);
+            UpdateEnemyProjectiles(delta);
+            UpdatePlayerShooting(delta);
+            UpdatePlayerProjectiles(delta);
+
         }
 
-
-        // -----------------------------------------------------
-        // ATUALIZAÇÃO DOS INIMIGOS
-        // -----------------------------------------------------
-
-        UpdateEnemies(delta);
-
-
-        // -----------------------------------------------------
-        // PROJÉTEIS DOS INIMIGOS
-        // -----------------------------------------------------
-
-        UpdateEnemyProjectiles(delta);
-
-
-        // -----------------------------------------------------
-        // TIROS DO JOGADOR
-        // -----------------------------------------------------
-
-        UpdatePlayerShooting(delta);
-
-
-        // -----------------------------------------------------
-        // PROJÉTEIS DO JOGADOR
-        // -----------------------------------------------------
-
-        UpdatePlayerProjectiles(delta);
-
-
-        // -----------------------------------------------------
-        // VERIFICA FIM DA FASE 1
-        // -----------------------------------------------------
-
-        if (
-            enemiesKilled >= 15
-            && !phase1Completed
-        )
-        {
-            phase1Completed = true;
-
-            waitingPhase2 = true;
-
-            enemies.Clear();
-
-            enemyProjectiles.Clear();
-        }
-
+        UpdateLootPickups(delta);
+        UpdateWaveProgress(delta);
+        waveAnnouncementTimer = Math.Max(0, waveAnnouncementTimer - delta);
 
         // -----------------------------------------------------
         // EXPLOSÕES
@@ -783,11 +829,49 @@ public class GameForm : Form
 
     private void HandleGameOver()
     {
-        // O gameTimer NÃO é parado aqui de propósito: o form
-        // precisa continuar "vivo" para o KeyDown (Keys.R) do
-        // OnGameKeyDown continuar disparando e permitir reiniciar.
-        // O próprio GameLoop já retorna cedo quando player.HP <= 0,
-        // então o resto da lógica do jogo não é mais executado.
+        if (gameState == GameState.GameOver)
+            return;
+
+        gameState = GameState.GameOver;
+        UpdatePauseMenuVisibility();
+    }
+
+    private void UpdateWaveProgress(float delta)
+    {
+        if (
+            !finalWaveCleared
+            && waveTransitionTimer <= 0
+            && spawnedEnemiesThisWave >= EnemiesPerWave
+            && enemies.Count == 0
+        )
+        {
+            enemyProjectiles.Clear();
+            projectiles.Clear();
+            waveTransitionTimer = currentWave >= MaxWaves ? 10f : 4f;
+            waveAnnouncementTimer = 3f;
+            finalWaveCleared = currentWave >= MaxWaves;
+        }
+
+        if (waveTransitionTimer <= 0)
+            return;
+
+        waveTransitionTimer -= delta;
+
+        if (finalWaveCleared)
+        {
+            if (lootPickups.Count == 0 || waveTransitionTimer <= 0)
+            {
+                gameState = GameState.Victory;
+                UpdatePauseMenuVisibility();
+            }
+        }
+        else if (waveTransitionTimer <= 0)
+        {
+            currentWave++;
+            spawnedEnemiesThisWave = 0;
+            spawnTimer = 1f;
+            waveAnnouncementTimer = 2f;
+        }
     }
 
 
@@ -807,8 +891,14 @@ public class GameForm : Form
 
             enemy.Update(
                 delta,
-                player
+                fundo.Height
             );
+
+            if (enemy.X + enemy.Width < 0)
+            {
+                enemies.RemoveAt(i);
+                continue;
+            }
 
 
             // -------------------------------------------------
@@ -824,7 +914,7 @@ public class GameForm : Form
                 if (playerInvulnerability <= 0)
                 {
                     player.TakeDamage(1);
-
+                    SpawnExplosion(player.X, player.Y);
                     playerInvulnerability = 1f;
                 }
             }
@@ -888,7 +978,7 @@ public class GameForm : Form
                 if (playerInvulnerability <= 0)
                 {
                     player.TakeDamage(1);
-
+                    SpawnExplosion(projectile.X, projectile.Y);
                     playerInvulnerability = 1f;
                 }
 
@@ -1000,14 +1090,9 @@ public class GameForm : Form
                     // DANO
                     // -----------------------------------------
 
-                    enemy.TakeDamage(player.Damage);
-
-
-                    // -----------------------------------------
-                    // RECUPERA RAM
-                    // -----------------------------------------
-
-                    player.RestoreRAM(5);
+                    enemy.TakeDamage(projectile.Damage);
+                    if (!projectile.IsSpecial)
+                        player.RestoreRAM(5);
 
 
                     // -----------------------------------------
@@ -1026,19 +1111,22 @@ public class GameForm : Form
                     if (enemy.HP <= 0)
                     {
                         player.GainExperience(15);
+                        score += 100 * currentWave;
 
                         SpawnExplosion(
                             enemy.X,
                             enemy.Y
                         );
 
+                        lootPickups.Add(
+                            new LootPickup(
+                                enemy.X + (enemy.Width - LootPickup.PickupSize) / 2f,
+                                enemy.Y + (enemy.Height - LootPickup.PickupSize) / 2f,
+                                lootImage
+                            )
+                        );
+
                         enemies.RemoveAt(j);
-
-
-                        if (!phase1Completed)
-                        {
-                            enemiesKilled++;
-                        }
                     }
 
                     break;
@@ -1159,11 +1247,18 @@ public class GameForm : Form
         // -----------------------------------------------------
 
         graphics.DrawString(
-            $"FASE: {currentPhase}",
+            $"ONDA: {currentWave}/{MaxWaves}   SCORE: {score}",
             hudFont,
             Brushes.Orange,
             450,
             20
+        );
+        graphics.DrawString(
+            "TIRO ESPECIAL: E / BOTAO DIREITO (100 RAM)",
+            hudFont,
+            player.RAM >= 100 ? Brushes.Cyan : Brushes.Gray,
+            450,
+            45
         );
 
 
@@ -1173,8 +1268,11 @@ public class GameForm : Form
 
         foreach (var projectile in projectiles)
         {
+            using SolidBrush projectileBrush = new(
+                projectile.IsSpecial ? Color.Cyan : Color.Yellow
+            );
             graphics.FillRectangle(
-                Brushes.Yellow,
+                projectileBrush,
                 projectile.X,
                 projectile.Y,
                 projectile.Width,
@@ -1211,6 +1309,11 @@ public class GameForm : Form
             enemy.Draw(graphics);
         }
 
+        foreach (var loot in lootPickups)
+        {
+            loot.Draw(graphics);
+        }
+
 
         // -----------------------------------------------------
         // EXPLOSÕES
@@ -1226,42 +1329,11 @@ public class GameForm : Form
         // GAME OVER
         // -----------------------------------------------------
 
-        if (player.HP <= 0)
-        {
-            using Font gameOverFont =
-                new(
-                    "Arial",
-                    40,
-                    FontStyle.Bold
-                );
-
-            graphics.DrawString(
-                "GAME OVER XDDDD",
-                gameOverFont,
-                Brushes.Red,
-                fundo.Width / 2 - 200,
-                fundo.Height / 2
-            );
-
-            graphics.DrawString(
-                "Pressione R para reiniciar",
-                new Font(
-                    "Arial",
-                    20,
-                    FontStyle.Bold
-                ),
-                Brushes.White,
-                fundo.Width / 2 - 150,
-                fundo.Height / 2 + 60
-            );
-        }
-
-
         // -----------------------------------------------------
         // LEVEL UP
         // -----------------------------------------------------
 
-        if (choosingUpgrade)
+        if (choosingUpgrade && gameState == GameState.Playing)
         {
             graphics.FillRectangle(
                 Brushes.Black,
@@ -1329,60 +1401,72 @@ public class GameForm : Form
         }
 
 
-        // -----------------------------------------------------
-        // FASE 1 COMPLETA
-        // -----------------------------------------------------
-
-        if (phase1Completed)
+        switch (gameState)
         {
-            using Font phaseFont =
-                new(
-                    "Arial",
-                    30,
-                    FontStyle.Bold
-                );
-
-            graphics.DrawString(
-                "FASE 1 COMPLETA!",
-                phaseFont,
-                Brushes.Lime,
-                fundo.Width / 2 - 180,
-                fundo.Height / 2 - 100
-            );
+            case GameState.GameOver:
+                DrawStateOverlay(graphics, "GAME OVER", "R reiniciar | ESC sair", Color.Red);
+                break;
+            case GameState.Victory:
+                DrawStateOverlay(graphics, "VITÓRIA!", $"Pontuação: {score} | R jogar novamente | ESC sair", Color.Gold);
+                break;
         }
 
-
-        // -----------------------------------------------------
-        // ESPERA PARA FASE 2
-        // -----------------------------------------------------
-
-        if (waitingPhase2)
+        if (waveAnnouncementTimer > 0 && gameState == GameState.Playing)
         {
-            using Font phaseFont =
-                new(
-                    "Arial",
-                    32,
-                    FontStyle.Bold
-                );
-
+            string message = finalWaveCleared
+                ? "ULTIMA ONDA CONCLUIDA - COLETE OS RECURSOS"
+                : spawnedEnemiesThisWave >= EnemiesPerWave
+                    ? $"ONDA {currentWave} CONCLUIDA - PROXIMA EM {Math.Max(0, (int)Math.Ceiling(waveTransitionTimer))}s"
+                    : $"ONDA {currentWave} - PREPARE-SE";
+            using Font announcementFont = new("Consolas", 18, FontStyle.Bold);
+            SizeF messageSize = graphics.MeasureString(message, announcementFont);
             graphics.DrawString(
-                "FASE 1 COMPLETA!",
-                phaseFont,
-                Brushes.Lime,
-                fundo.Width / 2 - 180,
-                fundo.Height / 2 - 60
+                message,
+                announcementFont,
+                Brushes.Gold,
+                (fundo.Width - messageSize.Width) / 2,
+                85
             );
+        }
+    }
 
+    private void DrawStateOverlay(Graphics graphics, string title, string detail, Color titleColor)
+    {
+        using SolidBrush overlayBrush = new(Color.FromArgb(190, 0, 0, 0));
+        graphics.FillRectangle(overlayBrush, 0, 0, fundo.Width, fundo.Height);
 
-            graphics.DrawString(
-                "Voe para a direita",
-                new Font(
-                    "Arial",
-                    20
-                ),
-                Brushes.White,
-                fundo.Width / 2 - 100,
-                fundo.Height / 2
+        using Font titleFont = new("Arial", 36, FontStyle.Bold);
+        using Font detailFont = new("Arial", 16, FontStyle.Bold);
+        using SolidBrush titleBrush = new(titleColor);
+
+        SizeF titleSize = graphics.MeasureString(title, titleFont);
+        SizeF detailSize = graphics.MeasureString(detail, detailFont);
+
+        graphics.DrawString(
+            title,
+            titleFont,
+            titleBrush,
+            (fundo.Width - titleSize.Width) / 2,
+            fundo.Height / 2 - 55
+        );
+        graphics.DrawString(
+            detail,
+            detailFont,
+            Brushes.White,
+            (fundo.Width - detailSize.Width) / 2,
+            fundo.Height / 2 + 15
+        );
+    }
+
+    private sealed class DoubleBufferedPanel : Panel
+    {
+        public DoubleBufferedPanel()
+        {
+            SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.UserPaint,
+                true
             );
         }
     }

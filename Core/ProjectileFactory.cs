@@ -13,7 +13,23 @@ public static class ProjectileFactory
             Width = 30,
             Height = 15,
             Speed = 800f,
-            DirectionX = 1f
+            DirectionX = 1f,
+            Damage = player.Damage
+        };
+    }
+
+    public static Projectile CreatePlayerSpecialProjectile(Player player)
+    {
+        return new Projectile
+        {
+            X = player.X + player.Width,
+            Y = player.Y + (player.Height - 40) / 2f,
+            Width = 80,
+            Height = 40,
+            Speed = 650f,
+            DirectionX = 1f,
+            Damage = player.Damage * 5,
+            IsSpecial = true
         };
     }
 

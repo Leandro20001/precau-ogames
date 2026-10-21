@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
+using TuxSpace.Core;
 
 namespace TuxSpace.Forms;
 
@@ -57,6 +58,7 @@ public class FormTelaEntrada : Form
     private Label lblDano = null!;
 
     private Button btnIniciar = null!;
+    private readonly Cursor gameCursor;
 
     // -----------------------------------------------------
     // RESULTADO (lido pelo Program.cs após o ShowDialog)
@@ -77,14 +79,25 @@ public class FormTelaEntrada : Form
         MaximizeBox = false;
         MinimizeBox = false;
         BackColor = Color.Black;
+        gameCursor = CustomCursorFactory.LoadFromPng("Assets/cursor.png");
+        Cursor = gameCursor;
+        FormClosed += (_, _) => gameCursor.Dispose();
         BackgroundImage = Image.FromFile("Assets/WinXPfundo.png");
         BackgroundImageLayout = ImageLayout.Stretch;
 
         Resize += (s, e) => CentralizarConteudo();
 
         MontarInterface();
+        ApplyCursorToControls(this, gameCursor);
         AtualizarPreview();
         AtualizarLabelsDePontos();
+    }
+
+    private static void ApplyCursorToControls(Control control, Cursor cursor)
+    {
+        control.Cursor = cursor;
+        foreach (Control child in control.Controls)
+            ApplyCursorToControls(child, cursor);
     }
 
     // =========================================================
